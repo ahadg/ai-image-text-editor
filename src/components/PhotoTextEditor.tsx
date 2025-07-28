@@ -1,8 +1,9 @@
 import { useState, useRef, useCallback } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Upload, Eye, Download, Type, Move, RotateCcw } from "lucide-react";
+import { Upload, Eye, Download, Type, Move, RotateCcw, ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
+import { Link } from "react-router-dom";
 import { ImageUpload } from "./ImageUpload";
 import { TextCanvas } from "./TextCanvas";
 import { OCRProcessor } from "./OCRProcessor";
@@ -66,13 +67,23 @@ export const PhotoTextEditor = () => {
     <div className="min-h-screen bg-background p-4">
       <div className="max-w-7xl mx-auto space-y-6">
         {/* Header */}
-        <div className="text-center space-y-2">
-          <h1 className="text-4xl font-bold bg-gradient-primary bg-clip-text text-transparent">
-            Photo Text Editor
-          </h1>
-          <p className="text-muted-foreground text-lg">
-            Upload images, detect text with OCR, and edit text directly on the canvas
-          </p>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <Button variant="ghost" size="sm" asChild>
+              <Link to="/">
+                <ArrowLeft className="w-4 h-4 mr-2" />
+                Back to Home
+              </Link>
+            </Button>
+            <div className="text-center space-y-2">
+              <h1 className="text-4xl font-bold bg-gradient-primary bg-clip-text text-transparent">
+                Photo Text Editor
+              </h1>
+              <p className="text-muted-foreground text-lg">
+                Upload images, detect text with OCR, and edit text directly on the canvas
+              </p>
+            </div>
+          </div>
         </div>
 
         {/* Toolbar */}
