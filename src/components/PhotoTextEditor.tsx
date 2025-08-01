@@ -32,7 +32,7 @@ export const PhotoTextEditor = () => {
     setDetectedTexts([]);
     toast("Image uploaded successfully!");
   }, []);
-
+  console.log("detectedTexts",detectedTexts)
   const handleOCRComplete = useCallback((texts: DetectedText[]) => {
     setDetectedTexts(texts);
     setIsProcessing(false);
