@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react";
-import { Canvas as FabricCanvas, Textbox, FabricImage, IText } from "fabric";
+import { Canvas as FabricCanvas, Textbox, FabricImage, IText, Object, Group, Path, Circle, Shadow } from "fabric";
 import { toast } from "sonner";
 import { DetectedText } from "./PhotoTextEditor";
+import { FiEdit2, FiImage, FiType, FiMove, FiCopy, FiDownload, FiRefreshCw, FiInfo, FiAlignLeft, FiAlignCenter, FiAlignRight } from "react-icons/fi";
+import { TbTextSize, TbBorderOuter } from "react-icons/tb";
+import { IoColorFillOutline, IoTextOutline } from "react-icons/io5";
 
 interface TextCanvasProps {
   backgroundImage: string;
   detectedTexts: DetectedText[];
   currentTool: "select" | "text" | "move";
   onCanvasReady: (canvas: FabricCanvas) => void;
+  onTextEdit: (originalText: string, newText: string) => void;
   analyzeTextsWithStyles?: (
     texts: DetectedText[],
     imageDataUrl: string,
@@ -26,8 +30,12 @@ interface TextStyleInfo {
   textAlign: string;
 }
 
+interface EditIcon extends Object {
+  originalTextObject?: IText | Textbox;
+}
+
 export const TextCanvas = forwardRef<any, TextCanvasProps>(
-  ({ backgroundImage, detectedTexts, currentTool, onCanvasReady, analyzeTextsWithStyles }, ref) => {
+  ({ backgroundImage, detectedTexts, currentTool, onCanvasReady, onTextEdit, analyzeTextsWithStyles }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const fabricCanvasRef = useRef<FabricCanvas | null>(null);
     const [isLoading, setIsLoading] = useState(true);
@@ -35,7 +43,7 @@ export const TextCanvas = forwardRef<any, TextCanvasProps>(
     const [imageScale, setImageScale] = useState(1);
     const [selectedObject, setSelectedObject] = useState<any>(null);
     const [fontOptions, setFontOptions] = useState<TextStyleInfo>({
-      fontFamily: 'Arial',
+      fontFamily: 'Inter',
       fontSize: 16,
       fontWeight: 'normal',
       color: '#000000',
@@ -49,18 +57,34 @@ export const TextCanvas = forwardRef<any, TextCanvasProps>(
       exportCanvas: () => {
         const canvas = fabricCanvasRef.current;
         if (canvas) {
+          // Hide edit icons before exporting
+          canvas.getObjects().forEach(obj => {
+            if (obj.type === 'group' && (obj as any).isEditIconGroup) {
+              obj.visible = false;
+            }
+          });
+          
           const dataURL = canvas.toDataURL({
             format: 'png',
             quality: 1,
             multiplier: 2,
           });
           
+          // Show edit icons again
+          canvas.getObjects().forEach(obj => {
+            if (obj.type === 'group' && (obj as any).isEditIconGroup) {
+              obj.visible = true;
+            }
+          });
+          
+          canvas.renderAll();
+          
           const link = document.createElement('a');
           link.download = 'edited-image.png';
           link.href = dataURL;
           link.click();
           
-          toast("Image exported successfully!");
+          toast.success("Image exported successfully!");
         }
       },
       clearCanvas: () => {
@@ -78,44 +102,54 @@ export const TextCanvas = forwardRef<any, TextCanvasProps>(
       }
     }));
 
-    // Helper function to estimate text width
-    const estimateTextWidth = (text: string, fontSize: number, fontFamily: string, fontWeight: string): number => {
-      // Create a temporary canvas to measure text
-      const tempCanvas = document.createElement('canvas');
-      const tempCtx = tempCanvas.getContext('2d');
-      if (!tempCtx) return text.length * fontSize * 0.6; // fallback
+    // Create a better edit icon for a text object
+    const createEditIcon = (textObject: IText | Textbox): Group => {
+      const iconSize = 16;
+      const padding = 6;
       
-      tempCtx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
-      const metrics = tempCtx.measureText(text);
-      return metrics.width;
-    };
-
-    // Helper function to determine if text should be single line or multi-line
-    const shouldUseSingleLine = (detectedText: DetectedText, canvasWidth: number, canvasHeight: number): boolean => {
-      const bboxWidth = ((detectedText.bbox.x1 - detectedText.bbox.x0) / 100) * canvasWidth;
-      const bboxHeight = ((detectedText.bbox.y1 - detectedText.bbox.y0) / 100) * canvasHeight;
-      const aspectRatio = bboxWidth / bboxHeight;
+      // Create a simple pencil icon using SVG path
+      const pencilIcon = new Path('M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z', {
+        left: 0,
+        top: 0,
+        scaleX: 0.7,
+        scaleY: 0.7,
+        fill: '#ffffff',
+        originX: 'center',
+        originY: 'center',
+        selectable: false,
+        evented: false,
+      });
       
-      // If the bounding box is very wide relative to height, it's likely single line
-      if (aspectRatio > 5) return true;
+      // Create a subtle background circle
+      const background = new Circle({
+        radius: iconSize / 2,
+        fill: '#3b82f6',
+        originX: 'center',
+        originY: 'center',
+        selectable: false,
+        evented: false,
+        shadow: new Shadow({
+          color: 'rgba(0, 0, 0, 0.2)',
+          blur: 3,
+          offsetX: 0,
+          offsetY: 1,
+        })
+      });
       
-      // If text has no spaces or is very short, keep it single line
-      if (!detectedText.text.includes(' ') || detectedText.text.length < 15) return true;
+      // Group the icon elements
+      const iconGroup = new Group([background, pencilIcon], {
+        left: (textObject.left || 0) + (textObject.width || 0) + padding,
+        top: (textObject.top || 0) + ((textObject.height || 0) / 2),
+        hasControls: false,
+        hasBorders: false,
+        selectable: false,
+        evented: true,
+        isEditIconGroup: true,
+        originalTextObject: textObject,
+        hoverCursor: 'pointer',
+      });
       
-      // Check if estimated width for single line is reasonable
-      const fontSize = detectedText.style?.fontSize || 16;
-      const fontFamily = detectedText.style?.fontFamily || 'Arial';
-      const fontWeight = detectedText.style?.fontWeight || 'normal';
-      const estimatedWidth = estimateTextWidth(detectedText.text, fontSize, fontFamily, fontWeight);
-      
-      // If estimated width is much smaller than bbox, it's probably meant to be single line
-      if (estimatedWidth < bboxWidth * 0.8) return true;
-      
-      // Check text characteristics
-      const words = detectedText.text.split(' ');
-      if (words.length <= 3) return true; // Short phrases stay single line
-      
-      return false;
+      return iconGroup;
     };
 
     // Initialize canvas
@@ -125,7 +159,7 @@ export const TextCanvas = forwardRef<any, TextCanvasProps>(
       const canvas = new FabricCanvas(canvasRef.current, {
         width: 800,
         height: 600,
-        backgroundColor: '#ffffff',
+        backgroundColor: '#f8fafc',
         preserveObjectStacking: true,
         selection: currentTool === "select",
         isDrawingMode: false,
@@ -141,7 +175,7 @@ export const TextCanvas = forwardRef<any, TextCanvasProps>(
         
         if (activeObject && (activeObject.type === 'textbox' || activeObject.type === 'i-text')) {
           setFontOptions({
-            fontFamily: activeObject.fontFamily || 'Arial',
+            fontFamily: activeObject.fontFamily || 'Inter',
             fontSize: activeObject.fontSize || 16,
             fontWeight: activeObject.fontWeight || 'normal',
             color: activeObject.fill || '#000000',
@@ -153,11 +187,25 @@ export const TextCanvas = forwardRef<any, TextCanvasProps>(
       };
 
       const handleObjectModified = () => canvas.renderAll();
+      
       const handleDoubleClick = (e: any) => {
         const target = e.target;
         if (target && (target.type === 'textbox' || target.type === 'i-text')) {
           target.enterEditing();
           target.hiddenTextarea?.focus();
+        }
+      };
+      
+      // Handle edit icon clicks
+      const handleMouseDown = (e: any) => {
+        if (e.target && e.target.isEditIconGroup) {
+          const textObject = e.target.originalTextObject;
+          if (textObject) {
+            canvas.setActiveObject(textObject);
+            textObject.enterEditing();
+            textObject.hiddenTextarea?.focus();
+          }
+          e.e.stopPropagation();
         }
       };
 
@@ -166,6 +214,7 @@ export const TextCanvas = forwardRef<any, TextCanvasProps>(
       canvas.on('selection:cleared', () => setSelectedObject(null));
       canvas.on('object:modified', handleObjectModified);
       canvas.on('mouse:dblclick', handleDoubleClick);
+      canvas.on('mouse:down', handleMouseDown);
 
       return () => {
         if (canvas && !canvas.isDestroyed) {
@@ -173,6 +222,7 @@ export const TextCanvas = forwardRef<any, TextCanvasProps>(
           canvas.off('selection:updated', handleSelection);
           canvas.off('object:modified', handleObjectModified);
           canvas.off('mouse:dblclick', handleDoubleClick);
+          canvas.off('mouse:down', handleMouseDown);
           canvas.dispose();
         }
       };
@@ -235,29 +285,31 @@ export const TextCanvas = forwardRef<any, TextCanvasProps>(
         canvas.backgroundImage = img;
         canvas.renderAll();
         setIsLoading(false);
-        toast("Image loaded on canvas!");
+        toast.success("Image loaded successfully!");
       }).catch((error) => {
         console.error('Error loading image:', error);
-        toast.error("Failed to load image on canvas");
+        toast.error("Failed to load image");
         setIsLoading(false);
       });
     }, [backgroundImage]);
 
-    // Add detected texts to canvas
+    // Add detected texts to canvas with edit icons
     useEffect(() => {
       const canvas = fabricCanvasRef.current;
       if (!canvas || !detectedTexts.length || isAnalyzing) return;
 
-      // Remove existing text objects
-      const existingTexts = canvas.getObjects().filter(obj => 
-        (obj.type === 'textbox' || obj.type === 'i-text') && (obj as any).isDetectedText
+      // Remove existing text objects and their edit icons
+      const objectsToRemove = canvas.getObjects().filter(obj => 
+        (obj.type === 'textbox' || obj.type === 'i-text' || 
+         (obj.type === 'group' && (obj as any).isEditIconGroup)) && 
+        (obj as any).isDetectedText
       );
-      existingTexts.forEach(text => canvas.remove(text));
+      objectsToRemove.forEach(obj => canvas.remove(obj));
 
       const canvasWidth = canvas.width!;
       const canvasHeight = canvas.height!;
 
-      // Add new text objects
+      // Add new text objects with edit icons
       detectedTexts.forEach((detectedText) => {
         const x = (detectedText.bbox.x0 / 100) * canvasWidth;
         const y = (detectedText.bbox.y0 / 100) * canvasHeight;
@@ -267,7 +319,7 @@ export const TextCanvas = forwardRef<any, TextCanvasProps>(
         const style = detectedText.style || {
           fontSize: 16,
           fontWeight: 'normal',
-          fontFamily: 'Arial',
+          fontFamily: 'Inter',
           fill: '#000000',
           stroke: 'transparent',
           strokeWidth: 0,
@@ -277,99 +329,88 @@ export const TextCanvas = forwardRef<any, TextCanvasProps>(
 
         const adjustedY = y + (height * 0.1);
 
-        // Determine if this should be single line or multi-line text
-        const useSingleLine = shouldUseSingleLine(detectedText, canvasWidth, canvasHeight);
-        
-        let textObj;
-        
-        if (useSingleLine) {
-          // Use IText for single-line text (no automatic wrapping)
-          textObj = new IText(detectedText.text, {
-            left: x,
-            top: adjustedY,
-            fontSize: style.fontSize,
-            fill: style.fill,
-            stroke: style.stroke,
-            strokeWidth: style.strokeWidth,
-            fontFamily: style.fontFamily,
-            fontWeight: style.fontWeight,
-            charSpacing: style.letterSpacing,
-            selectable: currentTool === "select",
-            evented: currentTool === "select",
-            padding: 3,
-            transparentCorners: false,
-            cornerColor: '#0066cc',
-            cornerStrokeColor: '#0066cc',
-            borderColor: '#0066cc',
-            editingBorderColor: '#0066cc',
-            editable: true,
-            splitByGrapheme: false,
-            textAlign: 'left',
-            // Prevent line wrapping
-            splitByGrapheme: false,
-          });
-        } else {
-          // Use Textbox for multi-line text with proper width
-          const estimatedTextWidth = estimateTextWidth(
-            detectedText.text, 
-            style.fontSize, 
-            style.fontFamily, 
-            style.fontWeight
-          );
-          
-          // Use a more generous width to prevent unnecessary wrapping
-          const textWidth = Math.max(width, estimatedTextWidth * 1.1, 100);
-          
-          textObj = new Textbox(detectedText.text, {
-            left: x,
-            top: adjustedY,
-            width: textWidth,
-            fontSize: style.fontSize,
-            fill: style.fill,
-            stroke: style.stroke,
-            strokeWidth: style.strokeWidth,
-            fontFamily: style.fontFamily,
-            fontWeight: style.fontWeight,
-            lineHeight: style.lineHeight,
-            charSpacing: style.letterSpacing,
-            selectable: currentTool === "select",
-            evented: currentTool === "select",
-            padding: 3,
-            transparentCorners: false,
-            cornerColor: '#0066cc',
-            cornerStrokeColor: '#0066cc',
-            borderColor: '#0066cc',
-            editingBorderColor: '#0066cc',
-            editable: true,
-            splitByGrapheme: false,
-            textAlign: 'left',
-            // Additional properties to control wrapping
-            minWidth: textWidth,
-            dynamicMinWidth: true,
-          });
-        }
+        // Create text object
+        const textObj = new IText(detectedText.text, {
+          left: x,
+          top: adjustedY,
+          fontSize: style.fontSize,
+          fill: style.fill,
+          stroke: style.stroke,
+          strokeWidth: style.strokeWidth,
+          fontFamily: style.fontFamily,
+          fontWeight: style.fontWeight,
+          charSpacing: style.letterSpacing,
+          selectable: currentTool === "select",
+          evented: currentTool === "select",
+          padding: 3,
+          transparentCorners: false,
+          cornerColor: '#3b82f6',
+          cornerStrokeColor: '#3b82f6',
+          borderColor: '#3b82f6',
+          editingBorderColor: '#3b82f6',
+          cornerStyle: 'circle',
+          cornerSize: 8,
+          editable: true,
+          splitByGrapheme: false,
+          textAlign: 'left',
+        });
 
         // Add metadata
         (textObj as any).isDetectedText = true;
         (textObj as any).originalBbox = detectedText.bbox;
         (textObj as any).detectedStyle = style;
         (textObj as any).confidence = detectedText.confidence;
-        (textObj as any).isSingleLine = useSingleLine;
+        (textObj as any).originalText = detectedText.text;
 
         canvas.add(textObj);
+        
+        // Create and add edit icon
+        const editIcon = createEditIcon(textObj);
+        canvas.add(editIcon);
+        
+        // Link the text object to its edit icon
+        (textObj as any).editIcon = editIcon;
       });
 
       canvas.renderAll();
       
-      // Log detection results
-      console.log(`Added ${detectedTexts.length} text objects:`, 
-        detectedTexts.map(t => ({
-          text: t.text,
-          singleLine: shouldUseSingleLine(t, canvasWidth, canvasHeight)
-        }))
-      );
+      console.log(`Added ${detectedTexts.length} text objects with edit icons`);
       
     }, [detectedTexts, currentTool, isAnalyzing]);
+
+    // Handle text object modifications to update edit icon position
+    useEffect(() => {
+      const canvas = fabricCanvasRef.current;
+      if (!canvas) return;
+
+      const handleObjectModified = (e: any) => {
+        const modifiedObject = e.target;
+        
+        // If a text object was modified and has an edit icon, update the icon position
+        if (modifiedObject && (modifiedObject.type === 'textbox' || modifiedObject.type === 'i-text') && 
+            modifiedObject.editIcon) {
+          const padding = 6;
+          modifiedObject.editIcon.set({
+            left: (modifiedObject.left || 0) + (modifiedObject.width || 0) + padding,
+            top: (modifiedObject.top || 0) + ((modifiedObject.height || 0) / 2),
+          });
+          canvas.renderAll();
+          
+          // Notify parent component about text edit
+          if (modifiedObject.originalText && onTextEdit) {
+            onTextEdit(modifiedObject.originalText, modifiedObject.text);
+          }
+        }
+      };
+
+      canvas.on('object:modified', handleObjectModified);
+      
+      return () => {
+        if (canvas && !canvas.isDestroyed) {
+          canvas.off('object:modified', handleObjectModified);
+        }
+      };
+    }, [onTextEdit]);
 
     // Handle canvas clicks for text tool
     useEffect(() => {
@@ -378,8 +419,8 @@ export const TextCanvas = forwardRef<any, TextCanvasProps>(
 
       const handleCanvasClick = (e: any) => {
         if (currentTool === "text" && e.pointer) {
-          // Always use IText for manually added text to prevent unwanted wrapping
-          const textObj = new IText('Click to edit', {
+          // Create new text object
+          const textObj = new IText('Double click to edit', {
             left: e.pointer.x - 50,
             top: e.pointer.y - 10,
             fontSize: fontOptions.fontSize,
@@ -392,10 +433,12 @@ export const TextCanvas = forwardRef<any, TextCanvasProps>(
             evented: true,
             padding: 4,
             transparentCorners: false,
-            cornerColor: '#0066cc',
-            cornerStrokeColor: '#0066cc',
-            borderColor: '#0066cc',
-            editingBorderColor: '#0066cc',
+            cornerColor: '#3b82f6',
+            cornerStrokeColor: '#3b82f6',
+            borderColor: '#3b82f6',
+            editingBorderColor: '#3b82f6',
+            cornerStyle: 'circle',
+            cornerSize: 8,
             editable: true,
             splitByGrapheme: false,
             textAlign: fontOptions.textAlign as any,
@@ -403,17 +446,18 @@ export const TextCanvas = forwardRef<any, TextCanvasProps>(
           });
 
           canvas.add(textObj);
+          
+          // Create edit icon for the new text
+          const editIcon = createEditIcon(textObj);
+          canvas.add(editIcon);
+          
+          // Link the text object to its edit icon
+          (textObj as any).editIcon = editIcon;
+          
           canvas.setActiveObject(textObj);
-          
-          setTimeout(() => {
-            if (canvas && !canvas.isDestroyed) {
-              textObj.enterEditing();
-              textObj.hiddenTextarea?.focus();
-            }
-          }, 100);
-          
           canvas.renderAll();
-          toast("Text added! Double-click to edit, drag to move");
+          
+          toast.info("Text added! Double-click or use the edit icon to edit");
         }
       };
 
@@ -455,7 +499,7 @@ export const TextCanvas = forwardRef<any, TextCanvasProps>(
           fabricCanvasRef.current.width || 800,
           fabricCanvasRef.current.height || 600
         );
-        toast(`Re-analyzed ${analyzedTexts.length} text regions`);
+        toast.success(`Re-analyzed ${analyzedTexts.length} text regions`);
       } catch (error) {
         console.error('Style analysis failed:', error);
         toast.error('Failed to analyze text styles');
@@ -480,11 +524,12 @@ export const TextCanvas = forwardRef<any, TextCanvasProps>(
           strokeWidth: style.strokeWidth,
           textAlign: selectedObject.textAlign || 'left',
         });
-        toast("Style copied from selected text!");
+        toast.success("Style copied from selected text!");
       }
     };
 
     const availableFonts = [
+      'Inter',
       'Arial',
       'Arial Black',
       'Courier New',
@@ -501,185 +546,274 @@ export const TextCanvas = forwardRef<any, TextCanvasProps>(
 
     const hasSelectedText = selectedObject && (selectedObject.type === 'textbox' || selectedObject.type === 'i-text');
     const hasDetectedStyle = hasSelectedText && (selectedObject as any).detectedStyle;
-    const isSelectedTextSingleLine = hasSelectedText && (selectedObject as any).isSingleLine;
 
     return (
-      <div className="flex gap-4">
+      <div className="flex flex-col lg:flex-row gap-6 p-4 bg-gray-50 rounded-lg">
         <div className="flex-1 space-y-4">
           <div className="flex justify-center">
-            <div className="relative border border-border rounded-lg overflow-hidden shadow-tool">
+            <div className="relative border-2 border-gray-200 rounded-xl overflow-hidden shadow-lg bg-white">
               {(isLoading || isAnalyzing) && (
-                <div className="absolute inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center z-10">
-                  <div className="text-center space-y-2">
-                    <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto"></div>
-                    <p className="text-sm text-muted-foreground">
+                <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-10 rounded-xl">
+                  <div className="text-center space-y-3">
+                    <div className="w-10 h-10 border-3 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+                    <p className="text-sm text-gray-600 font-medium">
                       {isLoading ? "Loading image..." : "Analyzing text styles..."}
                     </p>
                   </div>
                 </div>
               )}
-              <canvas ref={canvasRef} className="max-w-full" />
+              <div className="p-3 bg-gray-100 border-b flex items-center justify-between text-sm text-gray-600">
+                <span className="flex items-center gap-2">
+                  <FiImage className="h-4 w-4" />
+                  Canvas - {currentTool === "select" ? "Select Mode" : currentTool === "text" ? "Text Mode" : "Move Mode"}
+                </span>
+                <span className="text-xs bg-gray-200 px-2 py-1 rounded">{fabricCanvasRef.current?.width} × {fabricCanvasRef.current?.height} px</span>
+              </div>
+              <canvas ref={canvasRef} className="max-w-full block mx-auto" />
             </div>
           </div>
           
-          <div className="text-center text-sm text-muted-foreground space-y-1">
+          <div className="text-center text-sm text-gray-600 space-y-2 bg-white p-4 rounded-lg shadow-sm border border-gray-200">
             {currentTool === "select" && (
               <div>
-                <p>Select and edit text objects</p>
-                <p className="text-xs">Double-click to edit text, drag to move</p>
+                <p className="font-medium text-gray-800 flex items-center justify-center gap-2"><FiType className="h-4 w-4" /> Select and Edit Text</p>
+                <p className="text-xs mt-1">Click text to select, then use the properties panel to edit</p>
+                <p className="text-xs mt-1 flex items-center justify-center gap-1">
+                  <span className="inline-flex items-center justify-center w-4 h-4 bg-blue-100 text-blue-600 rounded-full text-xs"><FiEdit2 className="h-3 w-3" /></span>
+                  Double-click or use the edit icon to modify text content
+                </p>
               </div>
             )}
             {currentTool === "text" && (
               <div>
-                <p>Click on the canvas to add new text</p>
-                <p className="text-xs">New text will use current style settings</p>
+                <p className="font-medium text-gray-800 flex items-center justify-center gap-2"><IoTextOutline className="h-4 w-4" /> Add New Text</p>
+                <p className="text-xs mt-1">Click anywhere on the canvas to add text</p>
+                <p className="text-xs mt-1">New text will use the current style settings</p>
+              </div>
+            )}
+            {currentTool === "move" && (
+              <div>
+                <p className="font-medium text-gray-800 flex items-center justify-center gap-2"><FiMove className="h-4 w-4" /> Move Objects</p>
+                <p className="text-xs mt-1">Click and drag to move text elements</p>
               </div>
             )}
           </div>
 
           {analyzeTextsWithStyles && (
-            <div className="flex justify-center gap-2">
+            <div className="flex justify-center">
               <button
                 onClick={performStyleAnalysis}
                 disabled={!detectedTexts.length || isAnalyzing}
-                className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                className="px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg hover:from-blue-600 hover:to-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium flex items-center gap-2 transition-all shadow-md hover:shadow-lg"
               >
-                {isAnalyzing ? "Analyzing..." : "Re-analyze Styles"}
+                {isAnalyzing ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span>Analyzing...</span>
+                  </>
+                ) : (
+                  <>
+                    <FiRefreshCw className="h-4 w-4" />
+                    <span>Re-analyze Text Styles</span>
+                  </>
+                )}
               </button>
             </div>
           )}
         </div>
 
-        <div className={`w-64 p-4 bg-background border border-border rounded-lg shadow-tool transition-opacity ${hasSelectedText ? 'opacity-100' : 'opacity-50'}`}>
-          <h3 className="font-medium mb-4">
-            Text Properties
+        <div className={`w-full lg:w-80 bg-white border border-gray-200 rounded-xl shadow-lg transition-all ${hasSelectedText ? 'opacity-100' : 'opacity-70'}`}>
+          <div className="p-4 border-b border-gray-200 bg-gradient-to-r from-gray-50 to-white">
+            <h3 className="font-semibold text-gray-800 flex items-center gap-2">
+              <FiType className="h-5 w-5 text-blue-500" />
+              Text Properties
+            </h3>
             {!hasSelectedText && (
-              <span className="text-xs text-muted-foreground block">Select text to edit</span>
+              <p className="text-xs text-gray-500 mt-1">Select a text element to edit its properties</p>
             )}
-          </h3>
+          </div>
           
-          {hasDetectedStyle && (
-            <div className="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
-              <h4 className="text-sm font-medium text-blue-800 mb-2">Detected Style</h4>
-              <div className="text-xs text-blue-600 space-y-1">
-                <div>Confidence: {(selectedObject as any).confidence}%</div>
-                <div>Font: {(selectedObject as any).detectedStyle.fontFamily}</div>
-                <div>Size: {(selectedObject as any).detectedStyle.fontSize}px</div>
-                <div>Weight: {(selectedObject as any).detectedStyle.fontWeight}</div>
-                <div>Type: {isSelectedTextSingleLine ? 'Single Line' : 'Multi-line'}</div>
-              </div>
-              <button
-                onClick={copyStyleFromSelected}
-                className="mt-2 px-2 py-1 bg-blue-500 text-white rounded text-xs hover:bg-blue-600"
-              >
-                Copy Style
-              </button>
-            </div>
-          )}
-          
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium mb-1">Font Family</label>
-              <select
-                value={fontOptions.fontFamily}
-                onChange={(e) => handleFontChange('fontFamily', e.target.value)}
-                className="w-full p-2 border rounded text-sm text-black"
-                disabled={!hasSelectedText}
-              >
-                {availableFonts.map(font => (
-                  <option key={font} value={font}>{font}</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-1">Font Size</label>
-              <input
-                type="number"
-                value={fontOptions.fontSize}
-                onChange={(e) => handleFontChange('fontSize', parseInt(e.target.value))}
-                className="w-full p-2 border rounded text-sm text-black"
-                min="8"
-                max="72"
-                disabled={!hasSelectedText}
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-1">Font Weight</label>
-              <select
-                value={fontOptions.fontWeight}
-                onChange={(e) => handleFontChange('fontWeight', e.target.value)}
-                className="w-full p-2 border rounded text-sm text-black"
-                disabled={!hasSelectedText}
-              >
-                <option value="normal">Normal</option>
-                <option value="bold">Bold</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-1">Text Color</label>
-              <input
-                type="color"
-                value={fontOptions.color}
-                onChange={(e) => handleFontChange('color', e.target.value)}
-                className="w-full h-10 text-black"
-                disabled={!hasSelectedText}
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-1">Stroke Color</label>
-              <input
-                type="color"
-                value={fontOptions.strokeColor}
-                onChange={(e) => handleFontChange('strokeColor', e.target.value)}
-                className="w-full h-10 text-black"
-                disabled={!hasSelectedText}
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-1">Stroke Width</label>
-              <input
-                type="range"
-                value={fontOptions.strokeWidth}
-                onChange={(e) => handleFontChange('strokeWidth', parseFloat(e.target.value))}
-                className="w-full text-black"
-                min="0"
-                max="2"
-                step="0.1"
-                disabled={!hasSelectedText}
-              />
-              <div className="text-xs text-muted-foreground">{fontOptions.strokeWidth}px</div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-1">Text Alignment</label>
-              <div className="flex gap-2">
-                {['left', 'center', 'right'].map(align => (
-                  <button
-                    key={align}
-                    onClick={() => handleFontChange('textAlign', align)}
-                    className={`p-2 border rounded text-sm flex-1 transition-colors ${
-                      fontOptions.textAlign === align 
-                        ? 'bg-primary text-white' 
-                        : 'bg-background hover:bg-gray-50'
-                    } ${!hasSelectedText ? 'opacity-50 cursor-not-allowed' : ''}`}
-                    disabled={!hasSelectedText}
-                  >
-                    {align.charAt(0).toUpperCase() + align.slice(1)}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {!hasSelectedText && (
-              <div className="text-xs text-muted-foreground p-2 bg-gray-50 rounded">
-                These settings will be used for new text when using the Text tool.
+          <div className="p-4 max-h-[calc(100vh-200px)] overflow-y-auto space-y-5">
+            {hasDetectedStyle && (
+              <div className="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-100">
+                <h4 className="text-sm font-medium text-blue-800 mb-2 flex items-center gap-1">
+                  <FiInfo className="h-4 w-4" />
+                  Detected Style
+                </h4>
+                <div className="text-xs text-blue-700 space-y-1">
+                  <div className="flex justify-between">
+                    <span>Confidence:</span>
+                    <span className="font-medium">{(selectedObject as any).confidence}%</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Font:</span>
+                    <span className="font-medium">{(selectedObject as any).detectedStyle.fontFamily}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Size:</span>
+                    <span className="font-medium">{(selectedObject as any).detectedStyle.fontSize}px</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Weight:</span>
+                    <span className="font-medium">{(selectedObject as any).detectedStyle.fontWeight}</span>
+                  </div>
+                </div>
+                <button
+                  onClick={copyStyleFromSelected}
+                  className="mt-3 w-full px-3 py-2 bg-blue-500 text-white rounded text-xs font-medium hover:bg-blue-600 transition-colors flex items-center justify-center gap-1 shadow-sm"
+                >
+                  <FiCopy className="h-3.5 w-3.5" />
+                  Copy This Style
+                </button>
               </div>
             )}
+            
+            <div className="space-y-5">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
+                  <FiType className="h-4 w-4 text-gray-400" />
+                  Font Family
+                </label>
+                <select
+                  value={fontOptions.fontFamily}
+                  onChange={(e) => handleFontChange('fontFamily', e.target.value)}
+                  className="w-full p-3 border border-gray-300 rounded-lg text-sm text-gray-800 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors shadow-sm"
+                  disabled={!hasSelectedText}
+                >
+                  {availableFonts.map(font => (
+                    <option key={font} value={font}>{font}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
+                  <TbTextSize className="h-4 w-4 text-gray-400" />
+                  Font Size
+                </label>
+                <input
+                  type="number"
+                  value={fontOptions.fontSize}
+                  onChange={(e) => handleFontChange('fontSize', parseInt(e.target.value))}
+                  className="w-full p-3 border border-gray-300 rounded-lg text-sm text-gray-800 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors shadow-sm"
+                  min="8"
+                  max="72"
+                  disabled={!hasSelectedText}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
+                  <TbTextSize className="h-4 w-4 text-gray-400" />
+                  Font Weight
+                </label>
+                <select
+                  value={fontOptions.fontWeight}
+                  onChange={(e) => handleFontChange('fontWeight', e.target.value)}
+                  className="w-full p-3 border border-gray-300 rounded-lg text-sm text-gray-800 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors shadow-sm"
+                  disabled={!hasSelectedText}
+                >
+                  <option value="normal">Normal</option>
+                  <option value="bold">Bold</option>
+                  <option value="600">Semi Bold</option>
+                  <option value="800">Extra Bold</option>
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
+                    <IoColorFillOutline className="h-4 w-4 text-gray-400" />
+                    Text Color
+                  </label>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="color"
+                      value={fontOptions.color}
+                      onChange={(e) => handleFontChange('color', e.target.value)}
+                      className="w-10 h-10 rounded cursor-pointer border border-gray-300 shadow-sm"
+                      disabled={!hasSelectedText}
+                    />
+                    <span className="text-sm text-gray-600 bg-gray-100 px-2 py-1 rounded">{fontOptions.color}</span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
+                    <TbBorderOuter className="h-4 w-4 text-gray-400" />
+                    Stroke Color
+                  </label>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="color"
+                      value={fontOptions.strokeColor}
+                      onChange={(e) => handleFontChange('strokeColor', e.target.value)}
+                      className="w-10 h-10 rounded cursor-pointer border border-gray-300 shadow-sm"
+                      disabled={!hasSelectedText}
+                    />
+                    <span className="text-sm text-gray-600 bg-gray-100 px-2 py-1 rounded">{fontOptions.strokeColor === 'transparent' ? 'None' : fontOptions.strokeColor}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
+                  <TbBorderOuter className="h-4 w-4 text-gray-400" />
+                  Stroke Width: <span className="text-blue-600 font-medium">{fontOptions.strokeWidth}px</span>
+                </label>
+                <input
+                  type="range"
+                  value={fontOptions.strokeWidth}
+                  onChange={(e) => handleFontChange('strokeWidth', parseFloat(e.target.value))}
+                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-500"
+                  min="0"
+                  max="2"
+                  step="0.1"
+                  disabled={!hasSelectedText}
+                />
+                <div className="flex justify-between text-xs text-gray-500 mt-1">
+                  <span>None</span>
+                  <span>Thin</span>
+                  <span>Thick</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
+                  <FiAlignLeft className="h-4 w-4 text-gray-400" />
+                  Text Alignment
+                </label>
+                <div className="flex gap-2">
+                  {[
+                    {value: 'left', icon: <FiAlignLeft className="h-4 w-4" />, label: 'Left'},
+                    {value: 'center', icon: <FiAlignCenter className="h-4 w-4" />, label: 'Center'},
+                    {value: 'right', icon: <FiAlignRight className="h-4 w-4" />, label: 'Right'},
+                  ].map(align => (
+                    <button
+                      key={align.value}
+                      onClick={() => handleFontChange('textAlign', align.value)}
+                      className={`p-3 border rounded-lg text-sm flex-1 transition-all flex flex-col items-center justify-center ${
+                        fontOptions.textAlign === align.value 
+                          ? 'bg-blue-500 text-white border-blue-500 shadow-sm' 
+                          : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                      } ${!hasSelectedText ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                      disabled={!hasSelectedText}
+                      title={align.label}
+                    >
+                      {align.icon}
+                      <span className="text-xs mt-1">{align.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {!hasSelectedText && (
+                <div className="p-3 bg-gray-50 rounded-lg border border-gray-200 text-xs text-gray-600 flex items-start gap-2">
+                  <FiInfo className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                  <span>These settings will be applied to new text when using the Text tool.</span>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>

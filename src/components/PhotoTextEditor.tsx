@@ -262,7 +262,7 @@ export const PhotoTextEditor = () => {
         )}
 
         {/* Service Available Status */}
-        {isServiceAvailable === true && (
+        {/* {isServiceAvailable === true && (
           <Card className="p-4 bg-green-50 border-green-200">
             <div className="flex items-center gap-2 text-green-800">
               <AlertCircle className="w-5 h-5" />
@@ -274,7 +274,7 @@ export const PhotoTextEditor = () => {
               </div>
             </div>
           </Card>
-        )}
+        )} */}
 
         {/* Toolbar */}
         <Card className="p-4 bg-gradient-glass backdrop-blur-sm border-border/50">
